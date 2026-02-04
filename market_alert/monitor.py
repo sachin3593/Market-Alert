@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Iterable, List, Tuple
 
@@ -23,6 +24,24 @@ class PriceAlert:
         return current_price <= self.target_price
 
 
+@dataclass(frozen=True)
+class TriggeredAlert:
+    alert: PriceAlert
+    current_price: float
+    triggered_at: datetime
+
+    @property
+    def direction(self) -> str:
+        return "above" if self.alert.notify_above else "below"
+
+    def message(self) -> str:
+        return (
+            f"{self.alert.exchange.value} {self.alert.symbol} "
+            f"is {self.direction} {self.alert.target_price:.2f}: "
+            f"{self.current_price:.2f}"
+        )
+
+
 class PriceMonitor:
     def __init__(self, notifier) -> None:
         self.notifier = notifier
@@ -31,20 +50,30 @@ class PriceMonitor:
         self,
         alerts: Iterable[PriceAlert],
         price_lookup,
-    ) -> List[Tuple[PriceAlert, float]]:
-        triggered: List[Tuple[PriceAlert, float]] = []
+    ) -> List[TriggeredAlert]:
+        triggered: List[TriggeredAlert] = []
         for alert in alerts:
             current_price = price_lookup(alert.exchange, alert.symbol)
             if alert.is_triggered(current_price):
-                triggered.append((alert, current_price))
+                triggered.append(
+                    TriggeredAlert(
+                        alert=alert,
+                        current_price=current_price,
+                        triggered_at=datetime.now(timezone.utc),
+                    )
+                )
         return triggered
 
-    def notify(self, triggered: Iterable[Tuple[PriceAlert, float]]) -> None:
-        for alert, current_price in triggered:
-            direction = "above" if alert.notify_above else "below"
-            message = (
-                f"{alert.exchange.value} {alert.symbol} "
-                f"is {direction} {alert.target_price:.2f}: "
-                f"{current_price:.2f}"
+    def notify(self, triggered: Iterable[TriggeredAlert]) -> None:
+        for item in triggered:
+            self.notifier.send(
+                item.message(),
+                metadata={
+                    "exchange": item.alert.exchange.value,
+                    "symbol": item.alert.symbol,
+                    "target_price": item.alert.target_price,
+                    "current_price": item.current_price,
+                    "direction": item.direction,
+                    "triggered_at": item.triggered_at.isoformat(),
+                },
             )
-            self.notifier.send(message)
